@@ -1,18 +1,12 @@
+import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 
+###############################################################################
+# 1) Função parse_ssim_line:
+#    Lê uma linha do tipo 3 (split) e extrai DataInicial, DataFinal, Frequência, etc.
+###############################################################################
 def parse_ssim_line(line: str):
-    """
-    Exemplo de linha (split por espaços):
-      splitted[0] = '3'
-      splitted[1] = 'G3'
-      splitted[2] = '10000101J01DEC2308DEC23'
-      splitted[3] = '5'  (frequência, ex. '5' ou '1234567')
-      splitted[4] = 'CGH09050905-0300'
-      splitted[5] = 'SDU10101010-0300'
-      splitted[6] = '73X'
-      splitted[9] = '1009' (campo de casamento)
-    """
     line_stripped = line.lstrip()
     splitted = line_stripped.split()
     if len(splitted) < 4:
@@ -20,125 +14,132 @@ def parse_ssim_line(line: str):
     if splitted[0] != '3':
         return None
 
+    # Exemplo de splitted:
+    # [0]="3", [1]="G3", [2]="10000101J01DEC2308DEC23", [3]="5",
+    # [4]="CGH09050905-0300", [5]="SDU10101010-0300", [6]="73X", ... [9]="1009" ...
     cod_cliente  = splitted[1]
-    chunk2       = splitted[2]  # "10000101J01DEC2308DEC23"
-    freq_str     = splitted[3]  # "5", "1234567", etc.
+    chunk2       = splitted[2]  # Ex.: '10000101J01DEC2308DEC23'
+    freq_str     = splitted[3]  # '5', '1234567', etc.
     origem_info  = splitted[4] if len(splitted) > 4 else ""
     destino_info = splitted[5] if len(splitted) > 5 else ""
     equip        = splitted[6] if len(splitted) > 6 else ""
     casamento    = splitted[9] if len(splitted) > 9 else ""
 
-    # chunk2 => [0:8]eight_char, [8]status, [9:16]dataIni, [16:23]dataFin
+    # chunk2 => [0:8] => ex. '10000101', [8] => 'J', [9:16] => dataIni, [16:23] => dataFin
     if len(chunk2) < 23:
         return None
-    eight_char   = chunk2[0:8]
-    data_inicial_str = chunk2[9:16]   # p.ex. "01DEC23"
-    data_final_str   = chunk2[16:23]  # p.ex. "08DEC23"
+
+    eight_char   = chunk2[0:8]   # '10000101'
+    data_inicial_str = chunk2[9:16]  # '01DEC23'
+    data_final_str   = chunk2[16:23] # '08DEC23'
 
     nro_voo    = eight_char[0:4]
-    # date_count= eight_char[4:6]  # se precisar
-    # etapa     = eight_char[6:8]  # se precisar
+    # se quiser dateCount = eight_char[4:6], etapa = eight_char[6:8], etc.
 
-    # Horas e Aeroportos
+    # Origem e HoraPartida
     if len(origem_info) >= 7:
-        origem       = origem_info[0:3]     # p.ex. 'CGH'
-        hora_partida = origem_info[3:7]     # p.ex. '0905'
+        origem       = origem_info[0:3]     # ex. 'CGH'
+        hora_partida = origem_info[3:7]     # ex. '0905'
     else:
         origem = ""
         hora_partida = ""
+
+    # Destino e HoraChegada
     if len(destino_info) >= 7:
-        destino      = destino_info[0:3]
-        hora_chegada = destino_info[3:7]
+        destino      = destino_info[0:3]    # ex. 'SDU'
+        hora_chegada = destino_info[3:7]    # ex. '1010'
     else:
         destino = ""
         hora_chegada = ""
 
     return {
-        "CodCliente": cod_cliente,
-        "Voo": nro_voo,
-        "DataInicial": data_inicial_str,   # ex. "01DEC23"
-        "DataFinal":   data_final_str,     # ex. "08DEC23"
-        "Frequencia":  freq_str,           # ex. '5' ou '1234567'
+        "CodCliente":  cod_cliente,
+        "Voo":         nro_voo,
+        "DataInicial": data_inicial_str,
+        "DataFinal":   data_final_str,
+        "Frequencia":  freq_str,
         "Origem":      origem,
-        "HoraPartida": hora_partida,       # ex. "0905"
+        "HoraPartida": hora_partida,
         "Destino":     destino,
         "HoraChegada": hora_chegada,
         "Equip":       equip,
         "Casamento":   casamento
     }
 
+###############################################################################
+# 2) Expandir datas com base em DataInicial, DataFinal e Frequência.
+#    Frequência = string com dígitos 1..7 (1=seg,...,7=dom)
+#    Gera data no formato dd/mm/yyyy, hora no formato HH:MM
+###############################################################################
 def expand_with_frequency(row: dict):
-    """
-    Recebe um dicionário com DataInicial, DataFinal, Frequencia, etc.
-    Gera várias linhas, uma para cada dia do intervalo [DataInicial, DataFinal],
-    cujo dia da semana está na Frequencia.
-    Retorna uma lista de dicts, cada qual com DataPartida/ DataChegada = dd/mm/yyyy e
-    HoraPartida/HoraChegada = HH:MM
-    """
     data_inicial_str = row.get("DataInicial","")
     data_final_str   = row.get("DataFinal","")
     freq_str         = row.get("Frequencia","")
     if not data_inicial_str or not data_final_str:
         return []
 
-    # converter p/ datetime (padrão 'DDMMMYY' => '%d%b%y')
-    # ex.: '01DEC23'
+    # converter data (ex. '01DEC23' => '%d%b%y')
     try:
         dt_ini = datetime.strptime(data_inicial_str, "%d%b%y")
         dt_fim = datetime.strptime(data_final_str, "%d%b%y")
     except:
         return []
 
-    # Montar set de dias da semana. ex. '5' => {5}, '1234567' => {1,2,3,4,5,6,7}
+    # set de dias da semana
     freq_set = set()
     for c in freq_str:
         if c.isdigit():
-            freq_set.add(int(c))  # 1=seg ... 7=dom (conforme a convenção usual SSIM)
+            freq_set.add(int(c))  # 1=seg,...,7=dom
 
     expanded = []
-    # loop data
     d = dt_ini
     while d <= dt_fim:
-        # d.weekday() => 0=mon,...,6=sun => +1 => 1=mon,...,7=sun
-        dow = d.weekday() + 1
+        dow = d.weekday() + 1  # 1=seg,...,7=dom
         if dow in freq_set:
-            # Clonar row e trocar DataPartida/ DataChegada por d
             newrow = dict(row)
-            # Formatar data => dd/mm/yyyy
+            # data dd/mm/yyyy
             data_fmt = d.strftime("%d/%m/%Y")  # ex. "01/12/2023"
             newrow["DataPartida"] = data_fmt
-            newrow["DataChegada"] = data_fmt  # Presume que o voo chega no mesmo dia
-            # Formatar HoraPartida => "HH:MM"
-            # se "HoraPartida" era "0905", transformamos em "09:05"
+            newrow["DataChegada"] = data_fmt  # presumindo que chega no mesmo dia
+            # hora partida => "HH:MM"
             hp = row.get("HoraPartida","")
-            if len(hp) == 4:  # '0905'
-                hp_formatted = hp[0:2] + ":" + hp[2:4]  # "09:05"
+            if len(hp) == 4:
+                hp_formatted = hp[:2] + ":" + hp[2:]
             else:
-                hp_formatted = hp  # se vier vazio ou outro formato
+                hp_formatted = hp
             newrow["HoraPartida"] = hp_formatted
 
             hc = row.get("HoraChegada","")
-            if len(hc) == 4:  # ex. "1010" => "10:10"
-                hc_formatted = hc[0:2] + ":" + hc[2:4]
+            if len(hc) == 4:
+                hc_formatted = hc[:2] + ":" + hc[2:]
             else:
                 hc_formatted = hc
             newrow["HoraChegada"] = hc_formatted
 
             expanded.append(newrow)
         d += timedelta(days=1)
-
     return expanded
 
-def exemplo_de_fluxo():
-    """
-    Exemplo completo de fluxo:
-    - Ler linhas SSIM de um arquivo
-    - parsear
-    - expandir
-    - *depois* agrupar ou casar (ex.: groupby 'Casamento' + data)
-    """
-    # 1) ler arquivo
-    with open("exemplo.ssim","r",encoding="latin-1") as f:
+###############################################################################
+# 3) Carregar arquivos de suporte (iata_airlines.csv, airport.csv) se existirem
+###############################################################################
+@st.cache_data
+def load_support_files():
+    try:
+        df_airlines = pd.read_csv("iata_airlines.csv")
+    except:
+        df_airlines = pd.DataFrame(columns=["IATA Designator","Airline Name","ICAO code"])
+    try:
+        df_airport = pd.read_csv("airport.csv")
+    except:
+        df_airport = pd.DataFrame(columns=["IATA","Airport","ICAO"])
+    return df_airlines, df_airport
+
+###############################################################################
+# 4) Lê o SSIM, faz parse, expande datas, depois casa 2 voos (saida+chegada)
+###############################################################################
+def gerar_csv_from_ssim(ssim_path, df_airlines, df_airport, output_csv="malha_consolidada.csv"):
+    with open(ssim_path,"r",encoding="latin-1") as f:
         lines = f.readlines()
 
     base_rows = []
@@ -146,35 +147,127 @@ def exemplo_de_fluxo():
         parsed = parse_ssim_line(line.rstrip('\n'))
         if parsed:
             base_rows.append(parsed)
-    # 2) expand freq
+    if len(base_rows) == 0:
+        st.error("Nenhuma linha do tipo 3 reconhecida no SSIM.")
+        return
+
+    # Expansão datas
     expanded = []
     for row in base_rows:
         multi = expand_with_frequency(row)
         expanded.extend(multi)
 
-    # Agora expanded tem 1 dict p/ cada dia em que opera
-    df = pd.DataFrame(expanded)
-    # exibe df
-    print("Malha expandida:")
-    print(df.head(20))
+    if len(expanded) == 0:
+        st.error("Nenhuma data foi gerada após expandir pela frequência.")
+        return
 
-    # 3) Fazer casamento
-    # -> Precisaremos de algo como: agrupar por (Casamento, DataPartida) ou "DataChegada" etc.
-    #   e supor que no df final, a 1a linha do group => 'saida', a 2a => 'chegada'.
-    #   se quiser a "visão do aeroporto" com 2 voos, etc.
-    #   Exemplo simplificado:
-    grouped = df.groupby(["Casamento","DataPartida"])
-    final_regs = []
-    for (cas_key, data_part), group in grouped:
-        group_sorted = group.sort_values("HoraPartida")  # se a do 1 = saida e do 2 = chegada
-        # etc...
-        # Exemplo, se group_sorted.iloc[0] = saida, group_sorted.iloc[1] = chegada
-        # e calculamos tempo de solo
+    df_voos = pd.DataFrame(expanded)
+    # map cia
+    map_iata_to_name = dict(zip(df_airlines["IATA Designator"], df_airlines["Airline Name"]))
+    map_iata_to_icao = dict(zip(df_airlines["IATA Designator"], df_airlines["ICAO code"]))
+
+    # map equip
+    equip_map = {
+        "73X":"B738",
+        "73G":"B738",
+        "77W":"B777",
         # ...
-        # final_regs.append(...)
-    # ...
-    # df_final = pd.DataFrame(final_regs)
-    # df_final.to_csv("malha_final.csv",index=False)
+    }
+
+    # criar col datetime p/ saida
+    df_voos["dt_partida"] = None
+    for idx, row2 in df_voos.iterrows():
+        try:
+            parted_str = row2["DataPartida"] + " " + row2["HoraPartida"]  # ex "01/12/2023 09:05"
+            dtp = datetime.strptime(parted_str, "%d/%m/%Y %H:%M")
+            df_voos.at[idx,"dt_partida"] = dtp
+        except:
+            df_voos.at[idx,"dt_partida"] = None
+
+    # agrupar
+    grouped = df_voos.groupby(["Casamento","DataPartida"])
+    registros = []
+    for (cas_key, dataKey), group in grouped:
+        gsorted = group.sort_values("dt_partida", na_position="first").reset_index(drop=True)
+        reg = {
+            "Base": None,
+            "Cód. Cliente": None,
+            "Nome": None,
+            "Data": dataKey,  # ex "01/12/2023"
+            "Mod": None,
+            "Tipo": None,
+            "Voo": None,
+            "Hora Chegada": None,
+            "Hora Saída": None,
+            "ICAO": None,
+            "AERONAVE": None
+        }
+
+        parted_dt = None
+        rowcount = 0
+        for _, r3 in gsorted.iterrows():
+            rowcount += 1
+            if rowcount == 1:
+                # Voo de saída
+                reg["Base"] = r3["Origem"]
+                reg["Cód. Cliente"] = r3["CodCliente"]
+                reg["Nome"] = map_iata_to_name.get(r3["CodCliente"], r3["CodCliente"])
+                reg["ICAO"] = map_iata_to_icao.get(r3["CodCliente"], r3["CodCliente"])
+                reg["Voo"] = r3["Voo"]
+                # Tipo e Aeronave
+                eq_ = r3["Equip"]
+                reg["Tipo"] = equip_map.get(eq_, eq_)
+                reg["AERONAVE"] = reg["Tipo"]
+                reg["Hora Saída"] = r3["HoraPartida"]
+                parted_dt = r3["dt_partida"]
+            elif rowcount == 2:
+                # Voo de chegada
+                reg["Hora Chegada"] = r3["HoraChegada"]
+                chg_dt = r3["dt_partida"]
+                if parted_dt and chg_dt:
+                    diff_h = (chg_dt - parted_dt).total_seconds()/3600
+                    if diff_h > 4:
+                        reg["Mod"] = "PNT"
+                    else:
+                        reg["Mod"] = "TST"
+                else:
+                    reg["Mod"] = "TST"
+
+        registros.append(reg)
+
+    df_final = pd.DataFrame(registros)
+    df_final = df_final[[
+        "Base","Cód. Cliente","Nome","Data","Mod","Tipo","Voo",
+        "Hora Chegada","Hora Saída","ICAO","AERONAVE"
+    ]]
+    df_final.to_csv(output_csv, index=False, encoding="utf-8")
+    st.success(f"Arquivo CSV gerado: {output_csv} ({len(df_final)} linhas).")
+
+###############################################################################
+# STREAMLIT
+###############################################################################
+def main():
+    st.title("Conversor SSIM - Expansão por Datas e Frequência, e Casamento (2 Voos)")
+    st.markdown("Aplicativo minimalista, o resto das explicações estarão no README.")
+
+    df_airlines, df_airport = load_support_files()
+
+    ssim_file = st.file_uploader("Carregue o arquivo SSIM:", type=["ssim","txt"])
+    if ssim_file:
+        with open("uploaded.ssim","wb") as f:
+            f.write(ssim_file.getbuffer())
+        
+        st.write(f"Arquivo: {ssim_file.name}, tamanho: {ssim_file.size} bytes")
+
+        if st.button("Processar"):
+            outcsv = "malha_consolidada.csv"
+            gerar_csv_from_ssim("uploaded.ssim", df_airlines, df_airport, outcsv)
+
+            try:
+                with open(outcsv,"rb") as fx:
+                    st.download_button("Baixar CSV", fx, file_name=outcsv, mime="text/csv")
+            except Exception as e:
+                st.error(f"Erro download: {e}")
 
 if __name__ == "__main__":
-    print("Este snippet não cria app.py. Integre as funções no seu código e chame-as.")
+    main()
