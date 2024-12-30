@@ -1,4 +1,4 @@
-# SSIM Malha - Expansão por Datas e Casamento
+# SSIM Malha - Para CSV
 
 Este repositório contém um aplicativo **Streamlit** que lê um arquivo **SSIM** (linhas do tipo `3`), expande as datas de acordo com o período (Data Inicial e Data Final) e a Frequência (quais dias da semana o voo opera). Em seguida, realiza o **casamento** de 2 voos (saída e chegada) na visão do aeroporto.
 
