@@ -1,114 +1,113 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
+import os
 
-###############################################################################
-# 1) Função parse_ssim_line:
-#    Lê uma linha do tipo 3 (split) e extrai DataInicial, DataFinal, Frequência, etc.
-###############################################################################
 def parse_ssim_line(line: str):
     line_stripped = line.lstrip()
     splitted = line_stripped.split()
     if len(splitted) < 4:
-        return None
-    if splitted[0] != '3':
-        return None
+        return None  # Linha muito curta
+    if splitted[0] != "3":
+        return None  # Não é linha do tipo 3
 
-    # Exemplo de splitted:
-    # [0]="3", [1]="G3", [2]="10000101J01DEC2308DEC23", [3]="5",
-    # [4]="CGH09050905-0300", [5]="SDU10101010-0300", [6]="73X", ... [9]="1009" ...
-    cod_cliente  = splitted[1]
-    chunk2       = splitted[2]  # Ex.: '10000101J01DEC2308DEC23'
-    freq_str     = splitted[3]  # '5', '1234567', etc.
-    origem_info  = splitted[4] if len(splitted) > 4 else ""
-    destino_info = splitted[5] if len(splitted) > 5 else ""
-    equip        = splitted[6] if len(splitted) > 6 else ""
-    casamento    = splitted[9] if len(splitted) > 9 else ""
+    # splitted[1] => cod_cliente
+    # splitted[2] => '10000101J01DEC2308DEC23'
+    # splitted[3] => frequência (ex. '5')
+    # splitted[4] => origem + hora
+    # splitted[5] => destino + hora
+    # splitted[6] => equip
+    # splitted[9] => possível voo de casamento (ou chunk sem o 'Z' etc.)
 
-    # chunk2 => [0:8] => ex. '10000101', [8] => 'J', [9:16] => dataIni, [16:23] => dataFin
+    cod_cliente   = splitted[1]
+    chunk2        = splitted[2] if len(splitted) > 2 else ""
+    freq_str      = splitted[3] if len(splitted) > 3 else ""
+    origem_info   = splitted[4] if len(splitted) > 4 else ""
+    destino_info  = splitted[5] if len(splitted) > 5 else ""
+    equip         = splitted[6] if len(splitted) > 6 else ""
+    casamento     = splitted[9] if len(splitted) > 9 else ""
+
+    # Se tiver 'Z' solto depois do número do voo, ou se splitted[9] == 'Z', ignoramos
+    # Ex.: "... G3 1251 Z ..."
+    if casamento == "Z":  
+        return None  # ignora essa linha
+
+    # chunk2 => ex.: '10000101J01DEC2308DEC23'
     if len(chunk2) < 23:
         return None
 
-    eight_char   = chunk2[0:8]   # '10000101'
-    data_inicial_str = chunk2[9:16]  # '01DEC23'
-    data_final_str   = chunk2[16:23] # '08DEC23'
+    eight_char   = chunk2[0:8]   # ex. '10000101'
+    data_inicial = chunk2[9:16]  # ex. '01DEC23'
+    data_final   = chunk2[16:23] # ex. '08DEC23'
+    voo          = eight_char[0:4]
 
-    nro_voo    = eight_char[0:4]
-    # se quiser dateCount = eight_char[4:6], etapa = eight_char[6:8], etc.
-
-    # Origem e HoraPartida
+    # origem e partida
     if len(origem_info) >= 7:
-        origem       = origem_info[0:3]     # ex. 'CGH'
-        hora_partida = origem_info[3:7]     # ex. '0905'
+        origem       = origem_info[:3]
+        hora_partida = origem_info[3:7]
     else:
-        origem = ""
-        hora_partida = ""
+        return None  # sem origem/hora, linha incompleta => ignorar
 
-    # Destino e HoraChegada
+    # destino e chegada
     if len(destino_info) >= 7:
-        destino      = destino_info[0:3]    # ex. 'SDU'
-        hora_chegada = destino_info[3:7]    # ex. '1010'
+        destino      = destino_info[:3]
+        hora_chegada = destino_info[3:7]
     else:
-        destino = ""
-        hora_chegada = ""
+        return None  # sem destino/hora => ignorar
 
     return {
-        "CodCliente":  cod_cliente,
-        "Voo":         nro_voo,
-        "DataInicial": data_inicial_str,
-        "DataFinal":   data_final_str,
-        "Frequencia":  freq_str,
-        "Origem":      origem,
-        "HoraPartida": hora_partida,
-        "Destino":     destino,
-        "HoraChegada": hora_chegada,
-        "Equip":       equip,
-        "Casamento":   casamento
+        "CodCliente":   cod_cliente,
+        "Voo":          voo,
+        "DataInicial":  data_inicial,
+        "DataFinal":    data_final,
+        "Frequencia":   freq_str,
+        "Origem":       origem,
+        "HoraPartida":  hora_partida,
+        "Destino":      destino,
+        "HoraChegada":  hora_chegada,
+        "Equip":        equip,
+        "Casamento":    casamento
     }
 
-###############################################################################
-# 2) Expandir datas com base em DataInicial, DataFinal e Frequência.
-#    Frequência = string com dígitos 1..7 (1=seg,...,7=dom)
-#    Gera data no formato dd/mm/yyyy, hora no formato HH:MM
-###############################################################################
 def expand_with_frequency(row: dict):
-    data_inicial_str = row.get("DataInicial","")
-    data_final_str   = row.get("DataFinal","")
-    freq_str         = row.get("Frequencia","")
-    if not data_inicial_str or not data_final_str:
+    """
+    Expandir datas: DataInicial -> DataFinal, 
+    filtrando pelos dias da semana contidos em 'Frequencia' (1=seg,...,7=dom).
+    Formatar data em dd/mm/yyyy e hora em HH:MM.
+    """
+    di = row.get("DataInicial","")
+    df = row.get("DataFinal","")
+    fs = row.get("Frequencia","")
+    if not di or not df:
         return []
 
-    # converter data (ex. '01DEC23' => '%d%b%y')
+    # converter data
     try:
-        dt_ini = datetime.strptime(data_inicial_str, "%d%b%y")
-        dt_fim = datetime.strptime(data_final_str, "%d%b%y")
+        dt_ini = datetime.strptime(di, "%d%b%y")
+        dt_fim = datetime.strptime(df, "%d%b%y")
     except:
         return []
 
-    # set de dias da semana
     freq_set = set()
-    for c in freq_str:
+    for c in fs:
         if c.isdigit():
             freq_set.add(int(c))  # 1=seg,...,7=dom
 
     expanded = []
     d = dt_ini
     while d <= dt_fim:
-        dow = d.weekday() + 1  # 1=seg,...,7=dom
+        dow = d.weekday()+1  # 1=seg,...,7=dom
         if dow in freq_set:
             newrow = dict(row)
-            # data dd/mm/yyyy
-            data_fmt = d.strftime("%d/%m/%Y")  # ex. "01/12/2023"
-            newrow["DataPartida"] = data_fmt
-            newrow["DataChegada"] = data_fmt  # presumindo que chega no mesmo dia
-            # hora partida => "HH:MM"
+            newrow["DataPartida"] = d.strftime("%d/%m/%Y")
+            newrow["DataChegada"] = d.strftime("%d/%m/%Y")
+            # horaPartida => "HH:MM"
             hp = row.get("HoraPartida","")
             if len(hp) == 4:
                 hp_formatted = hp[:2] + ":" + hp[2:]
             else:
                 hp_formatted = hp
             newrow["HoraPartida"] = hp_formatted
-
             hc = row.get("HoraChegada","")
             if len(hc) == 4:
                 hc_formatted = hc[:2] + ":" + hc[2:]
@@ -120,9 +119,6 @@ def expand_with_frequency(row: dict):
         d += timedelta(days=1)
     return expanded
 
-###############################################################################
-# 3) Carregar arquivos de suporte (iata_airlines.csv, airport.csv) se existirem
-###############################################################################
 @st.cache_data
 def load_support_files():
     try:
@@ -135,65 +131,75 @@ def load_support_files():
         df_airport = pd.DataFrame(columns=["IATA","Airport","ICAO"])
     return df_airlines, df_airport
 
-###############################################################################
-# 4) Lê o SSIM, faz parse, expande datas, depois casa 2 voos (saida+chegada)
-###############################################################################
-def gerar_csv_from_ssim(ssim_path, df_airlines, df_airport, output_csv="malha_consolidada.csv"):
+def gerar_csv_from_ssim(ssim_path, df_airlines, df_airport):
+    """
+    Lê SSIM, parse, expande datas, faz casamento (2 voos),
+    e salva CSV com nome <arquivo>_convertido.csv
+    """
+    # extrair nome do ssim sem extensão
+    base_name = os.path.basename(ssim_path)
+    root, ext = os.path.splitext(base_name)
+    output_csv = f"{root}_convertido.csv"
+
     with open(ssim_path,"r",encoding="latin-1") as f:
         lines = f.readlines()
 
     base_rows = []
+    ignored_count_parse = 0
     for line in lines:
         parsed = parse_ssim_line(line.rstrip('\n'))
         if parsed:
             base_rows.append(parsed)
-    if len(base_rows) == 0:
-        st.error("Nenhuma linha do tipo 3 reconhecida no SSIM.")
-        return
+        else:
+            ignored_count_parse += 1
 
-    # Expansão datas
+    if not base_rows:
+        st.error("Nenhuma linha do tipo 3 reconhecida no SSIM.")
+        return None, None
+
     expanded = []
     for row in base_rows:
         multi = expand_with_frequency(row)
         expanded.extend(multi)
 
-    if len(expanded) == 0:
-        st.error("Nenhuma data foi gerada após expandir pela frequência.")
-        return
+    if not expanded:
+        st.error("Nenhuma data gerada após expandir pela frequência.")
+        return None, None
 
     df_voos = pd.DataFrame(expanded)
-    # map cia
+
+    # Mapeamentos
     map_iata_to_name = dict(zip(df_airlines["IATA Designator"], df_airlines["Airline Name"]))
     map_iata_to_icao = dict(zip(df_airlines["IATA Designator"], df_airlines["ICAO code"]))
+    equip_map = {"73G":"B738","73X":"B738","77W":"B777"}
 
-    # map equip
-    equip_map = {
-        "73X":"B738",
-        "73G":"B738",
-        "77W":"B777",
-        # ...
-    }
-
-    # criar col datetime p/ saida
+    # converter date+time p/ datetime
     df_voos["dt_partida"] = None
-    for idx, row2 in df_voos.iterrows():
+    for i, r in df_voos.iterrows():
         try:
-            parted_str = row2["DataPartida"] + " " + row2["HoraPartida"]  # ex "01/12/2023 09:05"
+            parted_str = r["DataPartida"] + " " + r["HoraPartida"]  # "dd/mm/yyyy HH:MM"
             dtp = datetime.strptime(parted_str, "%d/%m/%Y %H:%M")
-            df_voos.at[idx,"dt_partida"] = dtp
+            df_voos.at[i,"dt_partida"] = dtp
         except:
-            df_voos.at[idx,"dt_partida"] = None
+            df_voos.at[i,"dt_partida"] = None
 
-    # agrupar
     grouped = df_voos.groupby(["Casamento","DataPartida"])
-    registros = []
-    for (cas_key, dataKey), group in grouped:
-        gsorted = group.sort_values("dt_partida", na_position="first").reset_index(drop=True)
+    final_rows = []
+    ignored_count_casamento = 0
+
+    for (cas_key, data_str), g in grouped:
+        g2 = g.sort_values("dt_partida", na_position="first").reset_index(drop=True)
+
+        # Precisamos de pelo menos 2 linhas p/ formar saida+chegada
+        if len(g2) < 2:
+            ignored_count_casamento += len(g2)
+            continue
+
         reg = {
             "Base": None,
-            "Cód. Cliente": None,
+            "Cod. Cliente": None,
             "Nome": None,
-            "Data": dataKey,  # ex "01/12/2023"
+            "Data": data_str,
             "Mod": None,
             "Tipo": None,
             "Voo": None,
@@ -202,72 +208,78 @@ def gerar_csv_from_ssim(ssim_path, df_airlines, df_airport, output_csv="malha_co
             "ICAO": None,
             "AERONAVE": None
         }
-
         parted_dt = None
-        rowcount = 0
-        for _, r3 in gsorted.iterrows():
-            rowcount += 1
-            if rowcount == 1:
-                # Voo de saída
-                reg["Base"] = r3["Origem"]
-                reg["Cód. Cliente"] = r3["CodCliente"]
-                reg["Nome"] = map_iata_to_name.get(r3["CodCliente"], r3["CodCliente"])
-                reg["ICAO"] = map_iata_to_icao.get(r3["CodCliente"], r3["CodCliente"])
-                reg["Voo"] = r3["Voo"]
-                # Tipo e Aeronave
-                eq_ = r3["Equip"]
-                reg["Tipo"] = equip_map.get(eq_, eq_)
-                reg["AERONAVE"] = reg["Tipo"]
-                reg["Hora Saída"] = r3["HoraPartida"]
-                parted_dt = r3["dt_partida"]
-            elif rowcount == 2:
-                # Voo de chegada
-                reg["Hora Chegada"] = r3["HoraChegada"]
-                chg_dt = r3["dt_partida"]
-                if parted_dt and chg_dt:
-                    diff_h = (chg_dt - parted_dt).total_seconds()/3600
-                    if diff_h > 4:
-                        reg["Mod"] = "PNT"
-                    else:
-                        reg["Mod"] = "TST"
+
+        # 1a linha => saída
+        r_out = g2.iloc[0]
+        reg["Base"] = r_out["Origem"]
+        reg["Cod. Cliente"] = r_out["CodCliente"]
+        reg["Nome"] = map_iata_to_name.get(r_out["CodCliente"], r_out["CodCliente"])
+        reg["ICAO"] = map_iata_to_icao.get(r_out["CodCliente"], r_out["CodCliente"])
+        reg["Voo"] = r_out["Voo"]
+        eq_ = r_out["Equip"]
+        reg["Tipo"] = equip_map.get(eq_, eq_)
+        if not reg["Tipo"]:
+            # se equip for inválido, pular
+            ignored_count_casamento += len(g2)
+            continue
+        reg["AERONAVE"] = reg["Tipo"]
+        reg["Hora Saída"] = r_out["HoraPartida"]
+
+        parted_dt = r_out["dt_partida"]
+
+        # 2a linha => chegada
+        if len(g2) >= 2:
+            r_in = g2.iloc[1]
+            reg["Hora Chegada"] = r_in["HoraChegada"]
+            chg_dt = r_in["dt_partida"]
+            if parted_dt and chg_dt:
+                diff_h = (chg_dt - parted_dt).total_seconds()/3600
+                if diff_h > 4:
+                    reg["Mod"] = "PNT"
                 else:
                     reg["Mod"] = "TST"
+            else:
+                reg["Mod"] = "TST"
+        else:
+            ignored_count_casamento += 1
+            continue
 
-        registros.append(reg)
+        final_rows.append(reg)
 
-    df_final = pd.DataFrame(registros)
+    df_final = pd.DataFrame(final_rows)
     df_final = df_final[[
-        "Base","Cód. Cliente","Nome","Data","Mod","Tipo","Voo",
+        "Base","Cod. Cliente","Nome","Data","Mod","Tipo","Voo",
         "Hora Chegada","Hora Saída","ICAO","AERONAVE"
     ]]
+
     df_final.to_csv(output_csv, index=False, encoding="utf-8")
-    st.success(f"Arquivo CSV gerado: {output_csv} ({len(df_final)} linhas).")
 
-###############################################################################
-# STREAMLIT
-###############################################################################
+    return output_csv, (ignored_count_parse, ignored_count_casamento)
+
 def main():
-    st.title("Conversor SSIM - Expansão por Datas e Frequência, e Casamento (2 Voos)")
-    st.markdown("Aplicativo minimalista, o resto das explicações estarão no README.")
-
+    st.title("Conversor SSIM - CSV (Expansão + Casamento)")
     df_airlines, df_airport = load_support_files()
 
-    ssim_file = st.file_uploader("Carregue o arquivo SSIM:", type=["ssim","txt"])
+    ssim_file = st.file_uploader("Selecione o arquivo SSIM:", type=["ssim","txt"])
     if ssim_file:
-        with open("uploaded.ssim","wb") as f:
+        ssim_filename = ssim_file.name
+        with open(ssim_filename,"wb") as f:
             f.write(ssim_file.getbuffer())
-        
-        st.write(f"Arquivo: {ssim_file.name}, tamanho: {ssim_file.size} bytes")
 
         if st.button("Processar"):
-            outcsv = "malha_consolidada.csv"
-            gerar_csv_from_ssim("uploaded.ssim", df_airlines, df_airport, outcsv)
-
-            try:
-                with open(outcsv,"rb") as fx:
-                    st.download_button("Baixar CSV", fx, file_name=outcsv, mime="text/csv")
-            except Exception as e:
-                st.error(f"Erro download: {e}")
+            outcsv, ignore_info = gerar_csv_from_ssim(ssim_filename, df_airlines, df_airport)
+            if outcsv:
+                st.success(f"Gerado arquivo: {outcsv}")
+                if ignore_info:
+                    parse_ign, cas_ign = ignore_info
+                    st.write(f"Linhas ignoradas no parse: {parse_ign}")
+                    st.write(f"Linhas ignoradas no casamento: {cas_ign}")
+                try:
+                    with open(outcsv,"rb") as fx:
+                        st.download_button("Baixar CSV", fx, file_name=outcsv, mime="text/csv")
+                except Exception as e:
+                    st.error(f"Erro download: {e}")
 
 if __name__ == "__main__":
     main()
