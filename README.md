@@ -23,5 +23,5 @@ Este repositório contém um aplicativo **Streamlit** que lê arquivos SSIM, exp
    ```bash
    git clone https://github.com/luisluna97/SSIMtoCSV.git
    cd seu-repo
-2. ** Acessar Link**:
+2. **Acessar link**:
 3. https://ssimtocsv.streamlit.app/
