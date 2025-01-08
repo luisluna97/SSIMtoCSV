@@ -1,283 +1,289 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
+import os
 
 ###############################################################################
-# 1) PARSE DA LINHA TIPO 3 (APENAS SPLIT)
+# 1) PARSE DA LINHA TIPO 3
 ###############################################################################
 def parse_ssim_line(line: str):
-    """
-    Igual ao código 'antigo' que funcionava bem:
-    splitted[0] = '3'
-    splitted[1] = cia
-    splitted[2] = ex. "10020101J01JAN2508JAN25"
-    splitted[3] = freq ex. "1234567"
-    splitted[4] = origem+hora
-    splitted[5] = destino+hora
-    splitted[6] = equip
-    splitted[9] = nextvoo (às vezes)
-
-    Se chunk2 < 23 chars => descarta
-    Origem e destino => 3 chars p/ apt + 4 chars p/ hora
-    """
-    line_str = line.strip()
-    if not line_str.startswith("3"):
+    line_stripped = line.lstrip()
+    splitted = line_stripped.split()
+    if len(splitted) < 4: 
+        return None
+    if splitted[0] != "3":
         return None
 
-    splitted = line_str.split()
-    if len(splitted) < 4:
+    # splitted[1] => cia
+    # splitted[2] => "10020101J01JAN2515JAN251234567" etc.
+    # splitted[9] => next voo/casamento (ex. 2136)
+    cod_cliente = splitted[1]
+    chunk2      = splitted[2] if len(splitted)>2 else ""
+    freq_str    = splitted[3] if len(splitted)>3 else ""
+    origem_info = splitted[4] if len(splitted)>4 else ""
+    destino_info= splitted[5] if len(splitted)>5 else ""
+    equip       = splitted[6] if len(splitted)>6 else ""
+    next_voo    = splitted[9] if len(splitted)>9 else ""
+
+    # chunk2 => 8 chars + 1 status + 7 + 7 => ex.: "10020101J01JAN2515JAN251234567..."
+    if len(chunk2)<23:
         return None
+    eight_char   = chunk2[0:8]    # p.ex. "10020101"
+    data_ini_str = chunk2[9:16]   # p.ex. "01JAN25"
+    data_fim_str = chunk2[16:23]  # p.ex. "15JAN25"
+    # Frequência pode continuar além, ex. "1234567" (podemos usar splitted[3] por simplicidade)
+    voo_num      = eight_char[0:4] # "1002" etc.
 
-    cia      = splitted[1]
-    chunk2   = splitted[2]
-    freq_str = splitted[3]
+    # Origem e HoraPartida
+    if len(origem_info)>=7:
+        origem = origem_info[:3]
+        hora_part = origem_info[3:7]
+    else:
+        origem = ""
+        hora_part = ""
 
-    # Precisamos de 23+ chars em chunk2 p/ dataIni e dataFim
-    if len(chunk2) < 23:
-        return None
-
-    # ex chunk2[:8] => "10020101"
-    eight_char   = chunk2[:8]       # "10020101"
-    data_ini_str = chunk2[9:16]     # "01JAN25"
-    data_fim_str = chunk2[16:23]    # "08JAN25"
-    num_voo      = eight_char[:4]   # "1002"
-
-    # Podem existir splitted[4], [5], [6], [9]
-    orig_blk = splitted[4] if len(splitted)>4 else ""
-    dest_blk = splitted[5] if len(splitted)>5 else ""
-    equip    = splitted[6] if len(splitted)>6 else ""
-    next_voo = splitted[9] if len(splitted)>9 else ""
-
-    def parse_ap(block: str):
-        """
-        ex: "CGH0905..." => apt=CGH, hora=0905
-        Se len(block)<7 => apt="", hora=""
-        """
-        if len(block)>=7:
-            apt  = block[:3]
-            hora = block[3:7]
-            return apt, hora
-        return "", ""
-
-    orig, hp = parse_ap(orig_blk)
-    dst , hc = parse_ap(dest_blk)
+    # Destino e HoraChegada
+    if len(destino_info)>=7:
+        destino = destino_info[:3]
+        hora_cheg= destino_info[3:7]
+    else:
+        destino = ""
+        hora_cheg= ""
 
     return {
-        "Cia": cia,
-        "NumVoo": num_voo,
+        "Cia": cod_cliente,
+        "NumVoo": voo_num,
         "DataIni": data_ini_str,
         "DataFim": data_fim_str,
         "Freq": freq_str,
-        "Origem": orig,
-        "HoraPartida": hp,
-        "Destino": dst,
-        "HoraChegada": hc,
+        "Origem": origem,
+        "HoraPartida": hora_part,
+        "Destino": destino,
+        "HoraChegada": hora_cheg,
         "Equip": equip,
         "NextVoo": next_voo
     }
 
 ###############################################################################
-# 2) EXPAND DATAS (DataIni->DataFim), Freq=1..7 => 1=Seg,...7=Dom
+# 2) EXPANDIR DATAS (DataIni->DataFim) FILTRANDO FREQUÊNCIA
+#    1=Seg,2=Ter,3=Qua,4=Qui,5=Sex,6=Sáb,7=Dom
 ###############################################################################
 def expand_dates(row: dict):
     di = row.get("DataIni","")
     df = row.get("DataFim","")
-    freq = row.get("Freq","")
+    freq_str = row.get("Freq","")
     if not di or not df:
         return []
 
+    # Converte datas: "01JAN25" => %d%b%y
     try:
-        dt_i = datetime.strptime(di, "%d%b%y")
-        dt_f = datetime.strptime(df, "%d%b%y")
+        dt_ini = datetime.strptime(di, "%d%b%y")
+        dt_fim = datetime.strptime(df, "%d%b%y")
     except:
         return []
 
     freq_set = set()
-    for c in freq:
+    for c in freq_str:
         if c.isdigit():
-            freq_set.add(int(c))
+            freq_set.add(int(c))  # 1=Seg,...,7=Dom
 
-    expanded=[]
-    d = dt_i
-    while d<= dt_f:
-        dow = d.weekday()+1  # 1=Mon,...7=Sun
+    expanded = []
+    d = dt_ini
+    while d <= dt_fim:
+        # weekday(): 0=Mon,...,6=Sun => +1 => 1=Mon,...,7=Sun
+        dow = d.weekday()+1
         if dow in freq_set:
-            newr = dict(row)
-            newr["DataOper"] = d.strftime("%d/%m/%Y")
-            expanded.append(newr)
+            newrow = dict(row)
+            # formata data => dd/mm/yyyy
+            newrow["DataOper"] = d.strftime("%d/%m/%Y")
+            expanded.append(newrow)
         d+=timedelta(days=1)
     return expanded
 
 ###############################################################################
-# 3) DUPLICAR EM CHEGADA/PARTIDA
+# 3) DUPLICAR CADA VOO (CHEGADA E PARTIDA)
 ###############################################################################
-def fix_time_4digits(tt: str)->str:
-    if len(tt)==4:
-        return tt[:2]+":"+tt[2:]
-    return tt
-
 def build_arrdep_rows(row: dict):
-    dataop = row.get("DataOper","")
-    orig   = row.get("Origem","")
-    hp     = fix_time_4digits(row.get("HoraPartida",""))
-    dst    = row.get("Destino","")
-    hc     = fix_time_4digits(row.get("HoraChegada",""))
+    """
+    Recebe um row ex.: {
+      "Cia":"G3", "NumVoo":"1002", "DataOper":"05/01/2025",
+      "Origem":"CGH","HoraPartida":"0905","Destino":"GRU","HoraChegada":"1010",
+      "Equip":"73X", "NextVoo":"2136"
+    }
+    Cria 2 registros:
+      [1] -> Partida (P) no Origem
+      [2] -> Chegada (C) no Destino
+    """
+    results = []
+    # formata hora => HH:MM
+    hp = row.get("HoraPartida","")
+    hc = row.get("HoraChegada","")
+    def fmtHora(x):
+        if len(x)==4:
+            return x[:2]+":"+x[2:]
+        return x
 
-    recs=[]
-    # Partida
-    if orig and hp:
-        recs.append({
-          "Aeroporto": orig,
-          "CP": "P",
-          "DataOper": dataop,
-          "NumVoo": row["NumVoo"],
-          "Hora": hp,
-          "Equip": row.get("Equip",""),
-          "NextVoo": row.get("NextVoo","")
-        })
-    # Chegada
-    if dst and hc:
-        recs.append({
-          "Aeroporto": dst,
-          "CP": "C",
-          "DataOper": dataop,
-          "NumVoo": row["NumVoo"],
-          "Hora": hc,
-          "Equip": row.get("Equip",""),
-          "NextVoo": row.get("NextVoo","")
-        })
-    return recs
+    hp_form = fmtHora(hp)
+    hc_form = fmtHora(hc)
+
+    # PARTIDA
+    part_rec = {
+      "Aeroporto": row["Origem"],
+      "CP": "P",  # Partida
+      "Cia": row["Cia"],
+      "NumVoo": row["NumVoo"],
+      "DataOper": row["DataOper"],  # Mesmo dia assumido
+      "Hora": hp_form,
+      "Equip": row["Equip"],
+      "NextVoo": row["NextVoo"],  # Se define nextvoo no ORIGEM ou no DEST?
+    }
+    results.append(part_rec)
+
+    # CHEGADA
+    cheg_rec = {
+      "Aeroporto": row["Destino"],
+      "CP": "C", # Chegada
+      "Cia": row["Cia"],
+      "NumVoo": row["NumVoo"],
+      "DataOper": row["DataOper"],
+      "Hora": hc_form,
+      "Equip": row["Equip"],
+      "NextVoo": row["NextVoo"],
+    }
+    results.append(cheg_rec)
+    return results
 
 ###############################################################################
-# 4) CONECTAR => Chegada + Partida => 1 linha (visão do aeroporto)
+# 4) CONECTAR CHEGADA E PARTIDA
+#    - "C" row com NextVoo=XYZ => achar "P" row do NumVoo=XYZ, no mesmo Aeroporto e DataOper
 ###############################################################################
-def to_hhmm(delta_hrs: float)-> str:
-    """
-    ex 30.5 => '30:30'
-    se <0 => '00:00'
-    """
-    if delta_hrs<0:
-        return "00:00"
-    hh = int(delta_hrs)
-    mm = int(round((delta_hrs - hh)*60))
-    return f"{hh}:{mm:02d}"
-
 def connect_rows(df):
     """
-    - df => colunas: [Aeroporto,CP,DataOper,NumVoo,Hora,Equip,NextVoo,...]
-    - Filtramos CP="C", para cada Chegada, se NextVoo=xxx => achar Partida(NumVoo=xxx) no msm (Aeroporto,DataOper) c/ dt>= dtChegada
-    - Calcula TempoSolo => 'hh:mm'
-    - Final => colunas: Aeroporto,DataOper,HoraChegada,VooChegada,HoraPartida,VooPartida,TempoSolo,EquipCheg,EquipPart
+    df: colunas: [Aeroporto,CP,Cia,NumVoo,DataOper,Hora,Equip,NextVoo]
+    Gera um df final do tipo:
+      [Aeroporto, Data, HoraChegada, VooChegada, HoraPartida, VooPartida, TempoSolo, ...]
     """
-    # converter date+time
-    df["dt"] = pd.to_datetime(df["DataOper"]+" "+df["Hora"], format="%d/%m/%Y %H:%M", errors="coerce")
+    # Converter DataOper + Hora -> datetime p/ ordenação
+    df["dt"] = pd.to_datetime(df["DataOper"] + " " + df["Hora"], format="%d/%m/%Y %H:%M", errors="coerce")
 
-    arr = df[df["CP"]=="C"].copy()
-    dep = df[df["CP"]=="P"].copy()
+    final_rows = []
+    # Para cada row CP="C", se NextVoo=xyz, buscar no df a row CP="P", NumVoo=xyz, mesmo Aeroporto, DataOper => dt>...
+    # Precisamos agrupar por (Aeroporto, DataOper) e ordenar por dt
+    grouped = df.groupby(["Aeroporto","DataOper"])
 
-    arr["HoraPartida"] = None
-    arr["VooPartida"]  = None
-    arr["EquipPart"]   = None
-    arr["TempoSolo"]   = None
+    for (apr, dataop), subdf in grouped:
+        subdf_sorted = subdf.sort_values("dt").reset_index(drop=True)
 
-    dep_gb = dep.groupby(["Aeroporto","NumVoo","DataOper"])
+        # Vamos varrer as linhas CP="C" e ver NextVoo
+        for i, r_c in subdf_sorted.iterrows():
+            if r_c["CP"]=="C" and r_c["NextVoo"]:
+                nxt = r_c["NextVoo"]
+                # Procurar PARTIDA
+                # -> subdf_sorted com CP="P" e NumVoo=nxt, dt maior ou igual à dt do r_c
+                cand = subdf_sorted[
+                  (subdf_sorted["CP"]=="P") &
+                  (subdf_sorted["NumVoo"]==nxt) &
+                  (subdf_sorted["dt"] >= r_c["dt"])
+                ]
+                if len(cand)>0:
+                    # Pegamos a 1a (menor dt)
+                    r_p = cand.iloc[0]
+                    # Calcular tempo de solo
+                    if pd.notna(r_c["dt"]) and pd.notna(r_p["dt"]):
+                        delta_h = (r_p["dt"] - r_c["dt"]).total_seconds()/3600
+                    else:
+                        delta_h = 0
 
-    for idx, rowC in arr.iterrows():
-        nxtv = rowC["NextVoo"]
-        if not nxtv:
-            continue
-        apr = rowC["Aeroporto"]
-        dop = rowC["DataOper"]
-        dtC = rowC["dt"]
-        key = (apr,nxtv,dop)
-        if key in dep_gb.groups:
-            idxs = dep_gb.groups[key]
-            cand = dep.loc[idxs]
-            # filtra cand dt>= dtC
-            cand2 = cand[cand["dt"]>= dtC]
-            if len(cand2)>0:
-                c2s = cand2.sort_values("dt")
-                dp  = c2s.iloc[0]
-                delta_hrs = (dp["dt"] - dtC).total_seconds()/3600
-                arr.at[idx,"TempoSolo"]   = to_hhmm(delta_hrs)
-                arr.at[idx,"VooPartida"]  = dp["NumVoo"]
-                arr.at[idx,"HoraPartida"] = dp["Hora"]
-                arr.at[idx,"EquipPart"]   = dp["Equip"]
+                    # Monta 1 registro final
+                    reg = {
+                      "Aeroporto": apr,
+                      "DataOper": dataop,
+                      "HoraChegada": r_c["Hora"],
+                      "VooChegada": r_c["NumVoo"],
+                      "HoraPartida": r_p["Hora"],
+                      "VooPartida": r_p["NumVoo"],
+                      "TempoSolo": round(delta_h,2),
+                      "EquipCheg": r_c["Equip"],
+                      "EquipPart": r_p["Equip"]
+                    }
+                    final_rows.append(reg)
 
-    # renomear
-    arr.rename(columns={
-      "Hora":"HoraChegada",
-      "NumVoo":"VooChegada",
-      "Equip":"EquipCheg"
-    }, inplace=True)
-
-    final_cols = [
-      "Aeroporto","DataOper","HoraChegada","VooChegada",
-      "HoraPartida","VooPartida","TempoSolo","EquipCheg","EquipPart"
-    ]
-    return arr[final_cols]
+    df_final = pd.DataFrame(final_rows)
+    return df_final
 
 ###############################################################################
-# 5) FLUXO COMPLETO
-###############################################################################
-def process_ssim(ssim_file):
+@st.cache_data
+def load_support_files():
+    # se quiser algo
+    return None, None
+
+def gerar_csv(ssim_file):
+    """
+    - Parse
+    - Expand datas
+    - Duplicar
+    - Conectar
+    - Summaries
+    """
+    # Ler lines
     lines = ssim_file.read().decode("latin-1").splitlines()
-
-    # parse
-    base=[]
+    base_rows = []
     for l in lines:
-        rec = parse_ssim_line(l)
-        if rec:
-            base.append(rec)
-    if not base:
-        return None
+        pr = parse_ssim_line(l.rstrip("\n"))
+        if pr:
+            base_rows.append(pr)
 
-    # expand
-    expanded=[]
-    for br in base:
-        e2 = expand_dates(br)
-        expanded.extend(e2)
-    if not expanded:
-        return None
+    # Expand
+    expanded = []
+    for row in base_rows:
+        exps = expand_dates(row)
+        for e2 in exps:
+            expanded.append(e2)
 
-    # duplicar
-    arrdep=[]
+    # Duplicar em C/P
+    arrdep = []
     for row in expanded:
+        # row => {Cia,NumVoo,DataOper,Origem,HoraPartida,Destino,HoraChegada,Equip,NextVoo...}
         arrdep += build_arrdep_rows(row)
-    if not arrdep:
-        return None
-    dfAD = pd.DataFrame(arrdep)
 
-    # connect
-    dfC = connect_rows(dfAD)
-    if len(dfC)==0:
-        return None
+    df = pd.DataFrame(arrdep)
+    if len(df)==0:
+        return None, pd.DataFrame(), pd.DataFrame()
 
-    return dfC
+    # Connect
+    df_final = connect_rows(df)
+
+    # Summaries (pedido: “quantidade de voos por aeroporto e por modelo”)
+    # 1) Por Aeroporto: contagem (C+P)
+    summary_airport = df.groupby("Aeroporto")["NumVoo"].count().reset_index(name="QtdeVoos")
+
+    # 2) Por Tipo (df tem Equip?). Se preferir, usar "Equip"
+    summary_equip = df.groupby("Equip")["NumVoo"].count().reset_index(name="QtdeVoos")
+
+    return df_final, summary_airport, summary_equip
 
 ###############################################################################
 def main():
-    st.title("Conversor SSIM - (Código Antigo + TempoSolo em hh:mm)")
+    st.title("Conversor SSIM - Frequência, Conexão e Resumos")
+    st.write("Carregue um arquivo SSIM. Expandimos as datas, viramos em 'arrivals/departures', conectamos NextVoo e geramos CSV.")
+    _, _ = load_support_files()
 
     ssim_file = st.file_uploader("Selecione o arquivo SSIM:", type=["ssim","txt"])
     if ssim_file:
         if st.button("Processar"):
-            dfC = process_ssim(ssim_file)
-            if dfC is None or len(dfC)==0:
-                st.error("Nenhum voo processado ou nenhuma chegada conectada.")
+            df_final, summary_airport, summary_equip = gerar_csv(ssim_file)
+            if df_final is None or len(df_final)==0:
+                st.error("Não foi possível gerar a planilha final (nenhuma linha processada).")
                 return
+            # Exibir Summaries
+            st.write("### Voos por Aeroporto")
+            st.dataframe(summary_airport)
+            st.write("### Voos por Modelo de Aeronave (Equip)")
+            st.dataframe(summary_equip)
 
-            # Exibe um sum. ex contagem p/ Aeroporto
-            st.write("### Resumo final por Aeroporto")
-            sum_air = dfC.groupby("Aeroporto")["VooChegada"].count().reset_index(name="Qtde")
-            st.dataframe(sum_air)
-
-            st.write("### Tabela final (Chegada+Partida)")
-            st.dataframe(dfC)
-
-            # Download
-            csv_str = dfC.to_csv(index=False).encode("utf-8")
-            st.download_button("Baixar CSV", data=csv_str, file_name="ssim_visao.csv", mime="text/csv")
+            # Baixar CSV
+            csv_bytes = df_final.to_csv(index=False).encode("utf-8")
+            st.download_button("Baixar CSV Final", csv_bytes, file_name="ssim_conectado.csv", mime="text/csv")
 
 if __name__=="__main__":
     main()
