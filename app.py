@@ -15,7 +15,7 @@ def parse_record_fixed(line: str, debug=False):
       line[28:35]  = freq (7 chars)
       line[36:51]  = origem+hora (15 chars)
       line[52:67]  = destino+hora(15 chars)
-      line[65:69]  = equip (3 chars) 
+      line[66:69]  = equip (3 chars) 
       line[70]     = espaço?
       line[140:144]= nextVoo (4 chars) 
 
@@ -48,7 +48,7 @@ def parse_record_fixed(line: str, debug=False):
         dest_blk   = line[52:67].strip()  
 
         # EXEMPLO: 3 chars p/ equip
-        equip      = line[73:76].strip()  
+        equip      = line[72:75].strip()  
         # 4 chars p/ nextVoo
         next_voo   = line[140:144].strip()
 
