@@ -1,18 +1,27 @@
-# SSIM Malha - Para CSV
+# Conversor SSIM para Malha de Aeroportos
 
-Este repositório contém um aplicativo **Streamlit** que lê um arquivo **SSIM** (linhas do tipo `3`), expande as datas de acordo com o período (Data Inicial e Data Final) e a Frequência (quais dias da semana o voo opera). Em seguida, realiza o **casamento** de 2 voos (saída e chegada) na visão do aeroporto.
+Este repositório contém um aplicativo **Streamlit** que lê arquivos SSIM, expande datas conforme a Frequência e converte para uma **visão de chegadas** por aeroporto (duplicando cada voo em Chegada/Partida e mostrando apenas as chegadas finais).
 
-## Como funciona
+## Inspiração
 
-1. **Parse** das linhas do tipo `3`: A cada linha, extrai:
-   - Datas de Início e Fim (Ex.: `01DEC23` a `08DEC23`)
-   - Frequência (Ex.: `5`, `1234567`, etc.)
-   - Horários de Origem e Destino
-   - Campo de “Casamento” (para unir dois voos em uma única linha final).
+- **[Schiphol-Hub/ssim](https://github.com/Schiphol-Hub/ssim)**  
+  Utilizamos princípios de parse robusto de linhas do tipo `3`, com slices em posições fixas e fallback em `split()`, conforme o SSIM oficial.
+  
+## Como Funciona
 
-2. **Expansão de Datas**: Para cada dia entre a Data Inicial e a Data Final, verifica se o dia da semana está na frequência e gera uma linha real. As datas são formatadas em `dd/mm/yyyy` e as horas em `HH:MM`.
+1. **Parse Robusto**: Cada linha do SSIM (tipo 3) é extraída com base em posições fixas (se >=200 chars) ou fallback com `split()`.  
+2. **Expansão**: De `DataIni` até `DataFim`, filtrando dias da semana pela Frequência (1=Seg, ..., 7=Dom).  
+3. **Duplicação C/P**: Cada voo expandido gera 2 linhas:  
+   - `CP="P"` (Partida) no aeroporto de origem.  
+   - `CP="C"` (Chegada) no aeroporto de destino.  
+4. **Conexão**: Para cada chegada que tenha `NextVoo=XXX`, buscamos a partida do voo XXX no mesmo aeroporto e data, calculando tempo de solo.  
+5. **Exibindo**: Mostramos somente as chegadas (CP="C"), agrupadas por mês.
 
-3. **Casamento (Saída + Chegada)**: Agrupa as linhas pelo campo de “Casamento” e pela data, obtendo duas linhas (primeira = saída, segunda = chegada) que se transformam em uma linha final no CSV. Também calcula o tempo de solo (se >4h = `PNT`, senão `TST`).
+## Passos para Executar
 
-4. **Resultado**: Gera um arquivo CSV chamado `malha_consolidada.csv`, com as colunas:
-
+1. **Clonar o Repositório**:
+   ```bash
+   git clone https://github.com/luisluna97/SSIMtoCSV.git
+   cd seu-repo
+2. ** Acessar Link**:
+3. https://ssimtocsv.streamlit.app/
