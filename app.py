@@ -3,78 +3,64 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 ###############################################################################
-# 1) PARSE POR OFFSETS FIXOS (ASSUME 200 CHARS EM TODAS AS LINHAS)
+# Debug flags: para não poluir demais, podemos usar checkboxes no app
 ###############################################################################
-def parse_ssim_line(line: str):
+def parse_ssim_line(line: str, debug_enabled: bool=False):
     """
-    Lê uma linha de 200 chars do tipo 3. 
-    Exemplo de offsets (ajuste se necessário):
-      line[0]   = '3'
-      line[1]   = espaço
-      line[2:4] = cia (2 chars)
-      line[4]   = espaço
-      line[6:14]= 8-char field (p.ex "10020101")
-      line[14]  = status (1 char?)
-      line[15:22] = dataIni (7 chars, ex "01JAN25")
-      line[22:29] = dataFim (7 chars, ex "08JAN25")
-      line[29]     = espaço
-      line[30:37] = freq (7 chars, ex "1234567")
-      line[37:44], line[44:51], etc. => A definir
-      ...
-      line[37:52] => Origem+hora+tz? (15 chars)
-      line[52:67] => Destino+hora+tz? (15 chars)
-      line[68:71] => Equip (3 chars)
-      ...
-      line[120:124] => nextVoo (4 chars)
-      ...
-    Se a linha for <200 chars, descartamos.
-    Se algo falhar, retornamos None.
+    Tenta parsear pelos offsets fixos se >= 200 chars, senão fallback no split.
+    Exibe logs caso debug_enabled seja True.
     """
+    if debug_enabled:
+        st.write("DEBUG Original line (len={}):".format(len(line)), repr(line))
 
-    # Checar se a linha tem 200 chars
-    if len(line) < 200:
-        return None
+    # se <200 chars => fallback
+    if len(line) >= 200:
+        rec = parse_by_offsets(line, debug_enabled)
+        if rec:
+            return rec
+        else:
+            # fallback
+            if debug_enabled:
+                st.write("DEBUG substring approach falhou, tentando split()")
+    return parse_by_split(line, debug_enabled)
+
+def parse_by_offsets(line: str, debug_enabled: bool=False):
+    """Exemplo de offsets fixos."""
     if line[0] != '3':
         return None
-
     try:
-        # airline
         cia        = line[2:4].strip()
-        eight_char = line[6:14].strip()    # ex "10020101"
-        # status    = line[14]
-        data_ini   = line[15:22].strip()   # "01JAN25"
-        data_fim   = line[22:29].strip()   # "08JAN25"
-        freq       = line[30:37].strip()   # "1234567"
-
-        # Origem + hora
-        # Ex.: line[37:52] => "CGH09050905-0300"
-        # Mas se for REAL SSIM, ver se é 15 chars
+        eight_char = line[6:14].strip()
+        data_ini   = line[15:22].strip()
+        data_fim   = line[22:29].strip()
+        freq       = line[30:37].strip()
         orig_blk   = line[37:52].strip()
-        # Destino + hora
         dest_blk   = line[52:67].strip()
         equip      = line[68:71].strip()
-        # nextVoo
-        next_voo   = line[120:124].strip()
+        next_voo   = line[120:124].strip() if len(line)>=124 else ""
 
-        # ex "10020101" => num_voo = "1002"
-        num_voo = eight_char[:4]
-
-        def parse_apt(block:str):
-            """
-            Se block ex "CGH0905-0300", 
-            apt= block[:3] => "CGH"
-            hora= block[3:7] => "0905" (ou "0905" e ignora tz?)
-            Ajuste se seu tz for fixo. 
-            """
-            if len(block)>=7:
-                apt  = block[:3]
-                hhmm = block[3:7]
-                return apt, hhmm
+        num_voo = eight_char[:4]  # "1002"
+        def parse_ap(bk:str):
+            if len(bk)>=7:
+                apt = bk[:3]
+                hora= bk[3:7]
+                return apt, hora
             return "", ""
 
-        orig,hp = parse_apt(orig_blk)
-        dst ,hc = parse_apt(dest_blk)
+        orig, hp = parse_ap(orig_blk)
+        dst , hc = parse_ap(dest_blk)
 
+        if debug_enabled:
+            st.write("DEBUG offsets parse =>", {
+                "cia": cia, "num_voo": num_voo, 
+                "data_ini": data_ini, "data_fim": data_fim, 
+                "freq": freq, 
+                "origem": orig, "horaPart": hp, 
+                "destino": dst, "horaCheg": hc,
+                "equip": equip, "next_voo": next_voo
+            })
+
+        # Se freq, etc. estiverem vazios ou algo, retorno None se quiser
         return {
           "Cia": cia,
           "NumVoo": num_voo,
@@ -88,34 +74,93 @@ def parse_ssim_line(line: str):
           "Equip": equip,
           "NextVoo": next_voo
         }
-
     except:
         return None
 
+def parse_by_split(line: str, debug_enabled: bool=False):
+    """Fallback parse. Similar ao 'código que funcionava'."""
+    splitted = line.strip().split()
+    if debug_enabled:
+        st.write("DEBUG splitted =>", splitted)
+    if len(splitted)<4:
+        return None
+    if splitted[0]!="3":
+        return None
+
+    cia = splitted[1]
+    chunk2 = splitted[2]
+    freq_str= splitted[3]
+    if len(chunk2)<23:
+        return None
+
+    eight_char   = chunk2[:8]
+    data_ini_str = chunk2[9:16]
+    data_fim_str = chunk2[16:23]
+    num_voo      = eight_char[:4]
+
+    orig_blk = splitted[4] if len(splitted)>4 else ""
+    dest_blk = splitted[5] if len(splitted)>5 else ""
+    equip    = splitted[6] if len(splitted)>6 else ""
+    nxtvoo   = splitted[9] if len(splitted)>9 else ""
+
+    def parse_ap(bk:str):
+        if len(bk)>=7:
+            return bk[:3], bk[3:7]
+        return "",""
+
+    o,hp = parse_ap(orig_blk)
+    d,hc = parse_ap(dest_blk)
+
+    if debug_enabled:
+        st.write("DEBUG splitted parse =>", {
+            "cia": cia, "num_voo": num_voo,
+            "dataIni": data_ini_str, "dataFim": data_fim_str,
+            "freq": freq_str,
+            "origem": o, "horaPart": hp,
+            "destino": d, "horaCheg": hc,
+            "equip": equip, "next_voo": nxtvoo
+        })
+
+    return {
+      "Cia": cia,
+      "NumVoo": num_voo,
+      "DataIni": data_ini_str,
+      "DataFim": data_fim_str,
+      "Freq": freq_str,
+      "Origem": o,
+      "HoraPartida": hp,
+      "Destino": d,
+      "HoraChegada": hc,
+      "Equip": equip,
+      "NextVoo": nxtvoo
+    }
+
 ###############################################################################
-# 2) EXPAND DATAS (MESMA LÓGICA)
+# 2) expand_dates
 ###############################################################################
-def expand_dates(row: dict):
+def expand_dates(row: dict, debug_enabled: bool=False):
     di = row.get("DataIni","")
     df = row.get("DataFim","")
-    freq_str = row.get("Freq","")
+    freq = row.get("Freq","")
     if not di or not df:
         return []
     try:
         dt_i = datetime.strptime(di, "%d%b%y")
         dt_f = datetime.strptime(df, "%d%b%y")
     except:
+        if debug_enabled:
+            st.write("DEBUG expand_dates => Erro ao converter dataIni/dataFim =>", di, df)
         return []
 
     freq_set = set()
-    for c in freq_str:
+    for c in freq:
         if c.isdigit():
-            freq_set.add(int(c))  # 1=seg,...7=dom
+            freq_set.add(int(c))
 
     expanded=[]
     d= dt_i
-    while d<= dt_f:
-        dow= d.weekday()+1
+    while d<=dt_f:
+        dow = d.weekday()+1
         if dow in freq_set:
             newr = dict(row)
             newr["DataOper"] = d.strftime("%d/%m/%Y")
@@ -124,14 +169,14 @@ def expand_dates(row: dict):
     return expanded
 
 ###############################################################################
-# 3) DUPLICAR C/P
+# 3) duplicar
 ###############################################################################
 def fix_time_4digits(tt:str)->str:
     if len(tt)==4:
         return tt[:2]+":"+tt[2:]
     return tt
 
-def build_arrdep_rows(row: dict):
+def build_arrdep_rows(row: dict, debug_enabled: bool=False):
     dataop = row.get("DataOper","")
     orig   = row.get("Origem","")
     hp     = fix_time_4digits(row.get("HoraPartida",""))
@@ -143,7 +188,7 @@ def build_arrdep_rows(row: dict):
     if orig and hp:
         recs.append({
           "Aeroporto": orig,
-          "CP": "P",
+          "CP":"P",
           "DataOper": dataop,
           "NumVoo": row["NumVoo"],
           "Hora": hp,
@@ -154,26 +199,29 @@ def build_arrdep_rows(row: dict):
     if dst and hc:
         recs.append({
           "Aeroporto": dst,
-          "CP": "C",
+          "CP":"C",
           "DataOper": dataop,
           "NumVoo": row["NumVoo"],
           "Hora": hc,
           "Equip": row.get("Equip",""),
           "NextVoo": row.get("NextVoo","")
         })
+
+    if debug_enabled and len(recs)==0:
+        st.write("DEBUG: build_arrdep_rows => Origem/Destino vazios =>", row)
     return recs
 
 ###############################################################################
-# 4) CONECTAR => UMA LINHA POR CHEGADA + PARTIDA
+# 4) connect
 ###############################################################################
 def to_hhmm(delta_hrs:float)->str:
     if delta_hrs<0:
         return "00:00"
-    h = int(delta_hrs)
-    m = int(round((delta_hrs - h)*60))
-    return f"{h}:{m:02d}"
+    hh = int(delta_hrs)
+    mm = int(round((delta_hrs - hh)*60))
+    return f"{hh}:{mm:02d}"
 
-def connect_rows(df):
+def connect_rows(df, debug_enabled: bool=False):
     df["dt"] = pd.to_datetime(df["DataOper"]+" "+df["Hora"], format="%d/%m/%Y %H:%M", errors="coerce")
 
     arr = df[df["CP"]=="C"].copy()
@@ -184,9 +232,9 @@ def connect_rows(df):
     arr["EquipPart"]   = None
     arr["TempoSolo"]   = None
 
-    # agrupar dep => (Aeroporto, NumVoo, DataOper)
-    dep_grp = dep.groupby(["Aeroporto","NumVoo","DataOper"])
+    dep_gb = dep.groupby(["Aeroporto","NumVoo","DataOper"])
 
+    final_count=0
     for idx, rowC in arr.iterrows():
         nxtv = rowC.get("NextVoo","")
         if not nxtv:
@@ -195,19 +243,22 @@ def connect_rows(df):
         dOp = rowC["DataOper"]
         dtC = rowC["dt"]
         key= (apr,nxtv,dOp)
-        if key in dep_grp.groups:
-            idxs = dep_grp.groups[key]
+        if key in dep_gb.groups:
+            idxs = dep_gb.groups[key]
             cand = dep.loc[idxs]
             cand2= cand[cand["dt"]>= dtC]
             if len(cand2)>0:
                 c2s= cand2.sort_values("dt")
-                dp = c2s.iloc[0]
-                delta_h = (dp["dt"] - dtC).total_seconds()/3600
-                arr.at[idx,"TempoSolo"]   = to_hhmm(delta_h)
+                dp= c2s.iloc[0]
+                delta_hrs= (dp["dt"] - dtC).total_seconds()/3600
+                arr.at[idx,"TempoSolo"]   = to_hhmm(delta_hrs)
                 arr.at[idx,"VooPartida"]  = dp["NumVoo"]
                 arr.at[idx,"HoraPartida"] = dp["Hora"]
                 arr.at[idx,"EquipPart"]   = dp["Equip"]
+                final_count+=1
 
+    if debug_enabled:
+        st.write(f"DEBUG connect_rows => {final_count} conexões feitas.")
     arr.rename(columns={
       "Hora":"HoraChegada",
       "NumVoo":"VooChegada",
@@ -221,59 +272,64 @@ def connect_rows(df):
     return arr[final_cols]
 
 ###############################################################################
-def process_ssim_file(lines):
-    """
-    Este é o fluxo principal para rodar no Colab ou local.
-    """
-    # 1) parse
+# PROCESS FUNCTION
+###############################################################################
+def process_ssim(lines, debug_enabled=False):
+    # 1 parse
     base=[]
-    for l in lines:
-        rec = parse_ssim_line(l)
+    for i, l in enumerate(lines):
+        rec = parse_ssim_line(l, debug_enabled)
         if rec:
             base.append(rec)
-    if not base:
-        return pd.DataFrame()
+    if debug_enabled:
+        st.write("DEBUG parse => base rows len =", len(base))
 
-    # 2) expand
+    # 2 expand
     expanded=[]
-    for b in base:
-        exps = expand_dates(b)
-        expanded.extend(exps)
-    if not expanded:
-        return pd.DataFrame()
+    for br in base:
+        exs = expand_dates(br, debug_enabled)
+        expanded.extend(exs)
+    if debug_enabled:
+        st.write("DEBUG expand => expanded len =", len(expanded))
 
-    # 3) duplicar
+    # 3 duplicar
     arrdep=[]
-    for e in expanded:
-        arrdep += build_arrdep_rows(e)
-    if not arrdep:
-        return pd.DataFrame()
-    dfAD = pd.DataFrame(arrdep)
+    for e2 in expanded:
+        recs= build_arrdep_rows(e2, debug_enabled)
+        arrdep.extend(recs)
+    if debug_enabled:
+        st.write("DEBUG duplicar => arrdep len =", len(arrdep))
 
-    # 4) connect
-    dfC = connect_rows(dfAD)
+    dfAD = pd.DataFrame(arrdep)
+    if len(dfAD)==0:
+        return pd.DataFrame()
+
+    # 4 connect
+    dfC = connect_rows(dfAD, debug_enabled)
+    if debug_enabled:
+        st.write("DEBUG connect => final len =", len(dfC))
     return dfC
 
-
-###############################################################################
-# ABAIXO: CÓDIGO STREAMLIT (SE QUISER RODAR NO COLAB, ADAPTAR)
 ###############################################################################
 def main():
-    st.title("Conversor SSIM com offsets fixos (200 chars) E parse antigo")
-    ssim_file = st.file_uploader("Selecione o arquivo SSIM (200 chars p/ linha):", type=["ssim","txt"])
+    st.title("Debug SSIM - Parse/Expand/Duplicate/Connect")
+
+    debug_mode = st.checkbox("Ativar logs de depuração?", value=False)
+    ssim_file = st.file_uploader("Selecione SSIM:", type=["ssim","txt"])
+
     if ssim_file:
         lines = ssim_file.read().decode("latin-1").splitlines()
+        st.write("DEBUG: total de linhas no arquivo =", len(lines))
 
-        dfC = process_ssim_file(lines)
-
-        if len(dfC)==0:
-            st.error("Nenhuma linha processada ou nenhuma chegada conectada.")
-            return
-
-        # Exibir
-        st.dataframe(dfC)
-        csv_str = dfC.to_csv(index=False).encode("utf-8")
-        st.download_button("Baixar CSV", csv_str, file_name="ssim_final.csv", mime="text/csv")
+        if st.button("Processar"):
+            dfC = process_ssim(lines, debug_enabled=debug_mode)
+            if len(dfC)==0:
+                st.error("Nenhuma linha no resultado final.")
+                return
+            st.write("## Tabela Final")
+            st.dataframe(dfC)
+            csv_str = dfC.to_csv(index=False).encode("utf-8")
+            st.download_button("Baixar CSV Final", csv_str, file_name="ssim_final.csv", mime="text/csv")
 
 if __name__=="__main__":
     main()
