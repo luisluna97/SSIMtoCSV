@@ -25,3 +25,6 @@ Este repositório contém um aplicativo **Streamlit** que lê arquivos SSIM, exp
    cd seu-repo
 2. **Acessar link**:
 3. https://ssimtocsv.streamlit.app/
+
+Contato:
+Luis Luna (luis.luna@ufpe.br)
