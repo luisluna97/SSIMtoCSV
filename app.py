@@ -48,7 +48,7 @@ def parse_record_fixed(line: str, debug=False):
         dest_blk   = line[52:67].strip()  
 
         # EXEMPLO: 3 chars p/ equip
-        equip      = line[67:70].strip()  
+        equip      = line[73:76].strip()  
         # 4 chars p/ nextVoo
         next_voo   = line[140:144].strip()
 
