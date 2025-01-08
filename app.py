@@ -301,8 +301,8 @@ def gerar_csv(ssim_file):
     return dfC
 
 def main():
-    st.title("Conversor SSIM (Inspiração Schiphol-Hub/ssim)")
-    st.write("Este aplicativo parseia um SSIM, expande datas, gera C/P e mostra apenas chegadas por mês, conectando NextVoo se existir.")
+    st.title("Conversor SSIM - Ground Handling")
+    st.write("Esta aplicação transforma um SSIM file em um CSV com uma ótica do aeroporto")
 
     ssim_file = st.file_uploader("Selecione SSIM:", type=["ssim","txt"])
     if ssim_file:
