@@ -9,7 +9,7 @@ Este repositório contém um aplicativo **Streamlit** que lê arquivos SSIM, exp
   
 ## Como Funciona
 
-1. **Parse Robusto**: Cada linha do SSIM (tipo 3) é extraída com base em posições fixas (se >=200 chars) ou fallback com `split()`.  
+1. **Parse**: Cada linha do SSIM (tipo 3) é extraída com base em posições fixas (se >=200 chars) ou fallback com `split()`.  
 2. **Expansão**: De `DataIni` até `DataFim`, filtrando dias da semana pela Frequência (1=Seg, ..., 7=Dom).  
 3. **Duplicação C/P**: Cada voo expandido gera 2 linhas:  
    - `CP="P"` (Partida) no aeroporto de origem.  
