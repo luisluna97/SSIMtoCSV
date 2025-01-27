@@ -5,7 +5,7 @@ Este repositório contém um aplicativo **Streamlit** que lê arquivos SSIM, exp
 ## Inspiração
 
 - **[Schiphol-Hub/ssim](https://github.com/Schiphol-Hub/ssim)**  
-  Utilizamos princípios de parse robusto de linhas do tipo `3`, com slices em posições fixas e fallback em `split()`, conforme o SSIM oficial.
+  Utilizamos parse para linhas do tipo `3`, com slices em posições fixas e fallback em `split()`, conforme o SSIM oficial.
   
 ## Como Funciona
 
